@@ -6,8 +6,6 @@ import { enqueue } from '../services/queueService';
 import { updateArquivoStatus, insertMultiplasMusicasIdentificadas, MusicaIdentificadaData } from '../services/databaseService';
 
 export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyReply) {
-  console.log('📥 Requisição recebida em /buscaAudD');
-
   let inputPath: string = '';
   let idArquivoBanco: number | undefined = undefined;
 
@@ -17,14 +15,11 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
     const file = await (request as any).file();
     if (!file) return reply.status(400).send({ error: 'Nenhum arquivo multipart recebido' });
     
-    console.log('📤 Fazendo upload para Supabase Storage...');
     const fileInfo = await saveFile(file);
     
-    // Salvar buffer em arquivo temporário para processamento
     inputPath = await bufferToTempFile(fileInfo.fileBuffer, fileInfo.fileName);
     idArquivoBanco = fileInfo.idArquivoBanco;
     
-    console.log('✅ Arquivo preparado para processamento');
     if (idArquivoBanco) {
       console.log(`📋 ID do banco: ${idArquivoBanco}`);
     }
@@ -34,13 +29,10 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
   }
 
   try {
-    // Atualizar status para "Em Processamento" se houver registro no banco
     if (idArquivoBanco) {
       try {
         await updateArquivoStatus(idArquivoBanco, 'Em Processamento');
-        console.log('✅ Status atualizado para "Em Processamento" no banco');
       } catch (err) {
-        console.log('⚠️ Erro ao atualizar status no banco: ' + (err instanceof Error ? err.message : String(err)));
       }
     }
 
@@ -49,9 +41,7 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
     console.log('Converted to wav: ' + wavPath);
 
     const SEG_SECONDS = 20;
-    console.log(`Starting splitWav for ${wavPath} with segmentSeconds=${SEG_SECONDS}`);
     const segments = await splitWav(wavPath, SEG_SECONDS);
-    console.log('Split into ' + segments.length + ' segments');
 
     const results: Array<{ segment: string; index: number; auddResponse: any }> = [];
     for (let i = 0; i < segments.length; i++) {
@@ -69,15 +59,15 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
         }
       });
       const auddRes = await promise;
+      console.log(`[AUDD] Resposta do segmento ${i}:`, JSON.stringify(auddRes, null, 2));
       results.push({ segment: seg, index: i, auddResponse: auddRes });
     }
 
-    console.log('Starting concatWavs');
     const combined = await concatWavs(segments, 'combined.wav');
     console.log('Concat finished: ' + combined);
 
-    // construir cronograma
     const found: Array<any> = [];
+    console.log(`[PROCESSAMENTO] Total de resultados AudD: ${results.length}`);
     function timecodeToSeconds(tc: string) {
       const parts = tc.split(':').map(Number).reverse();
       let s = 0;
@@ -145,13 +135,11 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
       }
     }
 
-    // Consolidar músicas encontradas
     const musicasEncontradas: Array<{ inicioSegundos: number; fimSegundos: number; titulo?: string; artista?: string; isrc?: string; dataLancamento?: string; fonte?: any }> = [];
 
     function extractIsrc(meta: any): string | undefined {
       if (!meta) return undefined;
       
-      // Tentar múltiplas fontes de ISRC
       const possibleIsrc = 
         meta.isrc || meta.ISRC || meta.external_ids?.isrc ||
         (meta.spotify && (meta.spotify.isrc || meta.spotify.external_ids?.isrc)) ||
@@ -161,7 +149,6 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
         (meta.result && meta.result.isrc) ||
         undefined;
       
-      // Validar formato ISRC (exemplo: USUM71703861)
       if (possibleIsrc && typeof possibleIsrc === 'string' && possibleIsrc.length >= 12) {
         console.log(`✅ ISRC encontrado: ${possibleIsrc}`);
         return possibleIsrc;
@@ -203,14 +190,12 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
       musicasEncontradas.push({ inicioSegundos: inicioSec, fimSegundos: fimSec, titulo, artista, isrc, dataLancamento: dataLanc, fonte: meta });
     }
 
-    // Função para converter segundos em formato MM:SS
     function secondsToTimecode(seconds: number): string {
       const mins = Math.floor(seconds / 60);
       const secs = Math.floor(seconds % 60);
       return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
 
-    // Ordenar por tempo de início e consolidar músicas contíguas/sobrepostas
     musicasEncontradas.sort((a, b) => a.inicioSegundos - b.inicioSegundos);
     
     const dedup: typeof musicasEncontradas = [];
@@ -221,7 +206,6 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
         continue;
       }
       
-      // Consolidar se a música atual começa dentro ou logo após a anterior (gap de até 2 segundos)
       const gap = m.inicioSegundos - last.fimSegundos;
       const sameMusic = (
         (m.titulo && last.titulo && m.titulo.toLowerCase() === last.titulo.toLowerCase()) ||
@@ -229,18 +213,15 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
       );
       
       if (gap <= 2 && sameMusic) {
-        // Consolidar: expandir o fim para cobrir a música inteira
         last.fimSegundos = Math.max(last.fimSegundos, m.fimSegundos);
         console.log(`🔗 Consolidando "${m.titulo}" - expandido até ${last.fimSegundos}s`);
         
-        // Atualizar metadados se estiverem faltando
         if (!last.titulo && m.titulo) last.titulo = m.titulo;
         if (!last.artista && m.artista) last.artista = m.artista;
         if (!last.isrc && m.isrc) last.isrc = m.isrc;
         if (!last.dataLancamento && m.dataLancamento) last.dataLancamento = m.dataLancamento;
         if (!last.fonte && m.fonte) last.fonte = m.fonte;
       } else {
-        // Nova música
         dedup.push(m);
       }
     }
@@ -279,10 +260,8 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
       configAudd: { params: { retorno: AUDD_CONFIG?.params?.return ?? '' } },
     };
 
-    // Salvar músicas identificadas no banco e atualizar status para "Finalizado"
     if (idArquivoBanco) {
       try {
-        // Preparar dados das músicas para inserção (seguindo schema do banco)
         const musicasParaSalvar: MusicaIdentificadaData[] = dedup.map((m, index) => {
           const meta = m.fonte || {};
           const musicaData = {
@@ -298,26 +277,17 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
             timestamp_fim_seg: m.fimSegundos
           };
           
-          console.log(`🎵 Música ${index + 1}: "${musicaData.titulo}" - ${musicaData.artista} | ISRC: ${musicaData.isrc || 'N/A'}`);
           return musicaData;
         });
 
         const duracaoTotal = segments.length * SEG_SECONDS;
 
-        // Inserir todas as músicas de uma vez (se houver)
         if (musicasParaSalvar.length > 0) {
           const resultados = await insertMultiplasMusicasIdentificadas(musicasParaSalvar);
-          console.log(`✅ ${resultados.length} músicas salvas no catálogo + detecções criadas`);
-          console.log(`⏳ Aguardando validação do usuário. Status: "Não Finalizado"`);
-        } else {
-          console.log(`⚠️ Nenhuma música encontrada.`);
         }
 
-        // Manter status como "Não Finalizado" até validação do usuário
         await updateArquivoStatus(idArquivoBanco, 'Não Finalizado', duracaoTotal);
-        console.log(`📋 Status: "Não Finalizado" - Aguardando validação do usuário. Duração: ${duracaoTotal}s`);
       } catch (err) {
-        console.log('⚠️ Erro ao salvar músicas/atualizar status no banco: ' + (err instanceof Error ? err.message : String(err)));
       }
     }
 
@@ -325,12 +295,10 @@ export async function buscaAudDHandler(request: FastifyRequest, reply: FastifyRe
   } catch (err: any) {
     console.log('❌ Erro no processamento: ' + (err?.message || String(err)));
     
-    // Atualizar status para "Erro" se houver registro no banco
     if (idArquivoBanco) {
       try {
         await updateArquivoStatus(idArquivoBanco, 'Erro');
-        console.log('✅ Status atualizado para "Erro" no banco');
-      } catch (updateErr) {
+        } catch (updateErr) {
         console.log('⚠️ Erro ao atualizar status de erro no banco: ' + (updateErr instanceof Error ? updateErr.message : String(updateErr)));
       }
     }

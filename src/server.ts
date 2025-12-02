@@ -1,16 +1,33 @@
 import * as dotenv from 'dotenv';
 dotenv.config();
-
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+
+// Importação das rotas
+import uploadRoutes from "./routes/uploadRoutes";
 import fileRoutes from './routes/fileRoutes';
-import authRoutes from './routes/authRoutes';
+// import authRoutes from './routes/authRoutes';
+import watchRoutes from "./routes/watchRoutes";
 
-const fastify = Fastify({ logger: true, bodyLimit: 1024 * 1024 * 1024 });
+const PORT = Number(process.env.PORT) || 8000;
 
+const fastify = Fastify({ 
+  logger: true, 
+  bodyLimit: 1024 * 1024 * 1024 // 1GB Limite Global
+});
+
+// 1️⃣ CORS deve ser o PRIMEIRO registro para evitar bloqueios
+fastify.register(cors, {
+  origin: '*', // Permite qualquer origem (Frontend, Postman, Mobile)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: false, // ⚠️ OBRIGATÓRIO ser false quando origin é '*'
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+});
+
+// Parsers manuais (opcionais, mas mantidos para compatibilidade com sua lógica específica)
 fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, function (req, body, done) {
   done(null, body);
 });
@@ -21,21 +38,16 @@ fastify.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer' }, function (req,
   done(null, body);
 });
 
+// 2️⃣ Configuração do Multipart (Uploads)
 fastify.register(multipart, {
-  attachFieldsToBody: false,
+  attachFieldsToBody: false, // Força o uso de req.file()
   limits: {
-    fileSize: 1024 * 1024 * 1024,
+    fileSize: 1024 * 1024 * 1024, // 1GB
     files: 10
   }
 });
 
-fastify.register(cors, {
-  origin: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization']
-});
-
+// Documentação Swagger
 fastify.register(swagger, {
   openapi: {
     info: {
@@ -45,22 +57,14 @@ fastify.register(swagger, {
     },
     servers: [
       {
-        url: `http://localhost:${process.env.PORT || 3000}`,
+        url: `http://localhost:${PORT}`, // ✅ Ajustado para usar a porta correta
         description: 'Desenvolvimento'
       }
     ],
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT'
-        }
-      }
-    },
     tags: [
-      { name: 'Authentication', description: 'Endpoints de autenticação' },
-      { name: 'Files', description: 'Endpoints de upload e processamento de arquivos' }
+      { name: 'Files', description: 'Endpoints de upload e processamento de arquivos' },
+      { name: 'Music', description: 'Endpoints de catálogo de músicas' },
+      { name: 'Reports', description: 'Endpoints de relatórios EDL' }
     ]
   }
 });
@@ -74,24 +78,23 @@ fastify.register(swaggerUi, {
   staticCSP: true
 });
 
+// Rota de Health Check
 fastify.get('/', async (request, reply) => {
-  reply.header('Access-Control-Allow-Origin', '*');
-  reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
+  // CORS já é tratado pelo plugin acima, não adicione headers manuais aqui
   return { 
     status: 'ok', 
     message: 'Servidor backend funcionando',
-    docs: `http://localhost:${process.env.PORT || 3000}/docs`
+    docs: `http://localhost:${PORT}/docs`
   };
 });
 
-fastify.register(authRoutes);
+// Registro das Rotas
 fastify.register(fileRoutes);
+fastify.register(uploadRoutes, { prefix: "/api/upload" });
+fastify.register(watchRoutes, { prefix: "/api/watch" });
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
-
-fastify.listen({ port: PORT }, (err, address) => {
+// Inicialização do Servidor
+fastify.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
   if (err) {
     fastify.log.error(err);
     process.exit(1);
@@ -100,8 +103,8 @@ fastify.listen({ port: PORT }, (err, address) => {
   console.log(`📚 Documentação Swagger: http://localhost:${PORT}/docs`);
   console.log('📋 Variáveis carregadas:');
   console.log('  - NODE_ENV:', process.env.NODE_ENV || 'production');
-  console.log('  - SKIP_AUTH:', process.env.SKIP_AUTH === 'true' ? '✅ Sem Autenticação (DEV)' : '✅ Utilizando Autenticação (PROD)');
   console.log('  - AUDD_TOKEN:', process.env.AUDD_TOKEN ? '✅ Configurado' : '❌ Não encontrado');
   console.log('  - SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ Configurado' : '❌ Não encontrado');
-  console.log('  - SUPABASE_SERVICE_KEY:', process.env.SUPABASE_SERVICE_KEY ? '✅ Configurado' : '❌ Não encontrado');
+  // Ajuste o nome da variável conforme seu .env real
+  console.log('  - SUPABASE_SERVICE_KEY:', (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY) ? '✅ Configurado' : '❌ Não encontrado');
 });

@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabase';
+import { supabase } from '../config/database';
 
 export interface ArquivoMidiaData {
   nome_original_arquivo: string;
@@ -26,7 +26,6 @@ export async function insertArquivoMidia(data: ArquivoMidiaData): Promise<number
     throw new Error(`Erro ao inserir registro no banco: ${error.message}`);
   }
 
-  console.log('✅ Registro criado no banco:', result.id_arquivo);
   return result.id_arquivo;
 }
 
@@ -47,6 +46,27 @@ export async function updateArquivoStatus(
     .eq('id_arquivo', idArquivo);
 
   if (error) {
+    // If the enum value was rejected (invalid input), try common variants (underscores/no-spaces/uppercase)
+    const msg = (error && (error.message || '')).toString();
+    if (msg.includes('invalid input value for enum') || msg.includes('invalid input value')) {
+      const candidates = [
+        // replace spaces with underscore
+        (status as string).replace(/\s+/g, '_'),
+        // remove spaces
+        (status as string).replace(/\s+/g, ''),
+        // uppercase with underscores
+        (status as string).toUpperCase().replace(/\s+/g, '_')
+      ];
+
+      for (const candidate of candidates) {
+        const { error: err2 } = await supabase
+          .from('arquivo_midia')
+          .update({ status: candidate })
+          .eq('id_arquivo', idArquivo);
+        if (!err2) return;
+      }
+    }
+
     throw new Error(`Erro ao atualizar status do arquivo: ${error.message}`);
   }
 }
@@ -65,7 +85,6 @@ export interface MusicaIdentificadaData {
 }
 
 export async function insertMusicaIdentificada(data: MusicaIdentificadaData): Promise<{ idMusica: number; idDeteccao: number }> {
-  // 1. Verificar se a música já existe no catálogo (por ISRC se disponível)
   let idMusica: number;
   
   if (data.isrc) {
@@ -78,7 +97,6 @@ export async function insertMusicaIdentificada(data: MusicaIdentificadaData): Pr
     if (musicaExistente) {
       idMusica = musicaExistente.id_musica;
     } else {
-      // Inserir nova música no catálogo
       const { data: novaMusica, error: errorMusica } = await supabase
         .from('musica')
         .insert({
@@ -99,7 +117,6 @@ export async function insertMusicaIdentificada(data: MusicaIdentificadaData): Pr
       idMusica = novaMusica.id_musica;
     }
   } else {
-    // Sem ISRC, inserir sempre como nova música
     const { data: novaMusica, error: errorMusica } = await supabase
       .from('musica')
       .insert({
@@ -120,7 +137,6 @@ export async function insertMusicaIdentificada(data: MusicaIdentificadaData): Pr
     idMusica = novaMusica.id_musica;
   }
 
-  // 2. Criar detecção musical (relacionamento com timestamps)
   const { data: deteccao, error: errorDeteccao } = await supabase
     .from('deteccao_musical')
     .insert({
@@ -146,21 +162,18 @@ export async function insertMultiplasMusicasIdentificadas(
 
   const resultados: Array<{ idMusica: number; idDeteccao: number }> = [];
 
-  // Processar cada música individualmente para evitar duplicatas no catálogo
   for (const musica of musicas) {
     try {
       const resultado = await insertMusicaIdentificada(musica);
       resultados.push(resultado);
     } catch (error) {
       console.error('Erro ao inserir música:', error);
-      // Continuar com as outras músicas mesmo se uma falhar
     }
   }
 
   return resultados;
 }
 
-// Função para buscar músicas de um arquivo
 export async function getMusicasPorArquivo(idArquivo: number) {
   const { data, error } = await supabase
     .from('musica')
@@ -175,7 +188,6 @@ export async function getMusicasPorArquivo(idArquivo: number) {
   return data || [];
 }
 
-// Interface para tabela deteccao_musical
 export interface DeteccaoMusicalData {
   id_deteccao: number;
   id_arquivo_midia: number;
@@ -183,14 +195,12 @@ export interface DeteccaoMusicalData {
   data_geracao: string;
 }
 
-// Interface para tabela relatorio_edl
 export interface RelatorioEDLData {
   id_relatorio: number;
   id_arquivo_midia: number;
   data_geracao: string;
 }
 
-// Criar detecção musical (relacionamento entre arquivo e músicas detectadas)
 export async function insertDeteccaoMusical(
   idArquivoMidia: number,
   idMusica: number
@@ -211,17 +221,12 @@ export async function insertDeteccaoMusical(
   return result.id_deteccao;
 }
 
-// Atualizar status de validação de uma detecção musical
-// Criar relatório EDL com contadores de validação
 export async function insertRelatorioEDL(
   idArquivoMidia: number,
   totalMusicas: number,
   musicasAprovadas: number,
   musicasRejeitadas: number
 ): Promise<number> {
-  console.log(`[DB] Inserindo relatório EDL para arquivo ${idArquivoMidia}...`);
-  console.log(`[DB] Total: ${totalMusicas}, Aprovadas: ${musicasAprovadas}, Rejeitadas: ${musicasRejeitadas}`);
-  
   const { data: result, error } = await supabase
     .from('relatorio_edl')
     .insert({
@@ -238,7 +243,6 @@ export async function insertRelatorioEDL(
     throw new Error(`Erro ao criar relatório EDL: ${error.message}`);
   }
 
-  console.log(`[DB] Relatório EDL criado com sucesso! ID: ${result.id_relatorio}`);
   return result.id_relatorio;
 }
 
@@ -256,15 +260,12 @@ export async function getArquivosPorStatus(status: string) {
   return data || [];
 }
 
-// Buscar relatório EDL por ID do arquivo
 export async function getRelatorioEDL(idArquivo: number) {
-  console.log(`[DB] Buscando relatório EDL para arquivo ${idArquivo}...`);
-  
   const { data, error } = await supabase
     .from('relatorio_edl')
     .select('*')
     .eq('id_arquivo_midia', idArquivo)
-    .order('data_criacao', { ascending: false })
+    .order('data_geracao', { ascending: false })
     .limit(1)
     .single();
 
@@ -273,7 +274,6 @@ export async function getRelatorioEDL(idArquivo: number) {
     return null;
   }
 
-  console.log(`[DB] Relatório EDL encontrado:`, data);
   return data;
 }
 
@@ -293,7 +293,6 @@ export async function getArquivoComMusicas(idArquivo: number) {
 
   console.log('✅ Arquivo encontrado:', arquivo);
 
-  // Buscar detecções com dados das músicas (JOIN)
   const { data: deteccoes, error: deteccoesError } = await supabase
     .from('deteccao_musical')
     .select(`
@@ -319,12 +318,8 @@ export async function getArquivoComMusicas(idArquivo: number) {
     throw new Error(`Erro ao buscar músicas: ${deteccoesError.message}`);
   }
 
-  console.log(`📊 Total de detecções encontradas: ${deteccoes?.length || 0}`);
-  if (deteccoes && deteccoes.length > 0) {
-    console.log('🎵 Primeira detecção:', JSON.stringify(deteccoes[0], null, 2));
-  }
 
-  // Transformar dados para formato mais legível
+
   const musicas = (deteccoes || []).map((d: any) => ({
     id_deteccao: d.id_deteccao,
     timestamp_inicio_seg: d.timestamp_inicio_seg,
@@ -332,10 +327,121 @@ export async function getArquivoComMusicas(idArquivo: number) {
     ...d.musica
   }));
 
-  console.log(`✅ Retornando ${musicas.length} músicas para o frontend`);
-
   return {
     arquivo,
     musicas
   };
+}
+
+export async function getAllArquivos() {
+  const { data: arquivos, error } = await supabase
+    .from('arquivo_midia')
+    .select('*')
+    .order('data_upload', { ascending: false });
+
+  if (error) {
+    throw new Error(`Erro ao buscar arquivos: ${error.message}`);
+  }
+
+  return arquivos || [];
+}
+
+export async function getRelatorioEDLById(idRelatorio: number) {
+  const { data: relatorio, error } = await supabase
+    .from('relatorio_edl')
+    .select('*')
+    .eq('id_relatorio', idRelatorio)
+    .single();
+  
+  if (error || !relatorio) {
+    throw new Error('Relatório EDL não encontrado');
+  }
+  
+  return relatorio;
+}
+
+export async function getArquivosFinalizados() {
+  const { data: arquivos, error: arquivosError } = await supabase
+    .from('arquivo_midia')
+    .select('*')
+    .eq('status', 'Finalizado')
+    .order('data_upload', { ascending: false });
+
+  if (arquivosError) {
+    throw new Error(`Erro ao buscar arquivos: ${arquivosError.message}`);
+  }
+
+  console.log(`[DB] Total de arquivos finalizados: ${arquivos?.length || 0}`);
+
+  const arquivosComRelatorio = await Promise.all(
+    (arquivos || []).map(async (arquivo: any) => {
+      console.log(`[DB] Buscando relatório para arquivo ${arquivo.id_arquivo}...`);
+      
+      const { data: relatorios, error: relatorioError } = await supabase
+        .from('relatorio_edl')
+        .select('*')
+        .eq('id_arquivo_midia', arquivo.id_arquivo)
+        .order('data_geracao', { ascending: false })
+        .limit(1);
+
+      console.log(`[DB] Resultado da query:`, { 
+        arquivo_id: arquivo.id_arquivo,
+        relatorios,
+        error: relatorioError 
+      });
+
+      const relatorio = relatorios && relatorios.length > 0 ? relatorios[0] : null;
+
+      return {
+        ...arquivo,
+        id_relatorio: relatorio?.id_relatorio || null
+      };
+    })
+  );
+
+  console.log(`[DB] Arquivos com relatório processados:`, arquivosComRelatorio.map(a => ({
+    id: a.id_arquivo,
+    nome: a.nome_original_arquivo,
+    id_relatorio: a.id_relatorio
+  })));
+
+  return arquivosComRelatorio;
+}
+
+export async function getAllMusicas() {
+  const { data: musicas, error } = await supabase
+    .from('musica')
+    .select('*')
+    .order('criado_em', { ascending: false });
+
+  if (error) {
+    throw new Error(`Erro ao buscar músicas: ${error.message}`);
+  }
+  
+  return musicas || [];
+}
+
+export async function getArquivoById(idArquivo: number) {
+  const { data: arquivo, error } = await supabase
+    .from('arquivo_midia')
+    .select('status')
+    .eq('id_arquivo', idArquivo)
+    .single();
+
+  if (error || !arquivo) {
+    throw new Error('Arquivo não encontrado');
+  }
+
+  return arquivo;
+}
+
+export async function finalizarArquivo(idArquivo: number) {
+  const { error } = await supabase
+    .from('arquivo_midia')
+    .update({ status: 'Finalizado' })
+    .eq('id_arquivo', idArquivo);
+
+  if (error) {
+    throw new Error(`Erro ao finalizar arquivo: ${error.message}`);
+  }
 }
