@@ -1,33 +1,37 @@
 import * as dotenv from 'dotenv';
+
 dotenv.config();
+
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-
-// Importação das rotas
 import uploadRoutes from "./routes/uploadRoutes";
 import fileRoutes from './routes/fileRoutes';
-// import authRoutes from './routes/authRoutes';
 import watchRoutes from "./routes/watchRoutes";
 
 const PORT = Number(process.env.PORT) || 8000;
+const HOST = process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1';
+
+console.log('🔧 Configuração do servidor:');
+console.log('  - NODE_ENV:', process.env.NODE_ENV);
+console.log('  - PORT:', PORT);
+console.log('  - HOST:', HOST);
+console.log('  - HOST será:', process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
 
 const fastify = Fastify({ 
   logger: true, 
-  bodyLimit: 1024 * 1024 * 1024 // 1GB Limite Global
+  bodyLimit: 1024 * 1024 * 1024
 });
 
-// 1️⃣ CORS deve ser o PRIMEIRO registro para evitar bloqueios
 fastify.register(cors, {
-  origin: '*', // Permite qualquer origem (Frontend, Postman, Mobile)
+  origin: '*', 
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: false, // ⚠️ OBRIGATÓRIO ser false quando origin é '*'
+  credentials: false,
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 });
 
-// Parsers manuais (opcionais, mas mantidos para compatibilidade com sua lógica específica)
 fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, function (req, body, done) {
   done(null, body);
 });
@@ -38,16 +42,14 @@ fastify.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer' }, function (req,
   done(null, body);
 });
 
-// 2️⃣ Configuração do Multipart (Uploads)
 fastify.register(multipart, {
-  attachFieldsToBody: false, // Força o uso de req.file()
+  attachFieldsToBody: false, 
   limits: {
-    fileSize: 1024 * 1024 * 1024, // 1GB
+    fileSize: 1024 * 1024 * 1024,
     files: 10
   }
 });
 
-// Documentação Swagger
 fastify.register(swagger, {
   openapi: {
     info: {
@@ -57,7 +59,7 @@ fastify.register(swagger, {
     },
     servers: [
       {
-        url: `http://localhost:${PORT}`, // ✅ Ajustado para usar a porta correta
+        url: `http://localhost:${PORT}`, 
         description: 'Desenvolvimento'
       }
     ],
@@ -78,33 +80,30 @@ fastify.register(swaggerUi, {
   staticCSP: true
 });
 
-// Rota de Health Check
 fastify.get('/', async (request, reply) => {
-  // CORS já é tratado pelo plugin acima, não adicione headers manuais aqui
   return { 
     status: 'ok', 
     message: 'Servidor backend funcionando',
-    docs: `http://localhost:${PORT}/docs`
+    docs: '/docs',
+    version: '1.0.0',
+    environment: process.env.NODE_ENV || 'development'
   };
 });
 
-// Registro das Rotas
 fastify.register(fileRoutes);
 fastify.register(uploadRoutes, { prefix: "/api/upload" });
 fastify.register(watchRoutes, { prefix: "/api/watch" });
 
-// Inicialização do Servidor
 fastify.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
   if (err) {
     fastify.log.error(err);
     process.exit(1);
   }
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  console.log(`📚 Documentação Swagger: http://localhost:${PORT}/docs`);
+  console.log(`🚀 Servidor rodando em ${address}`);
+  console.log(`📚 Documentação Swagger: ${address}/docs`);
   console.log('📋 Variáveis carregadas:');
-  console.log('  - NODE_ENV:', process.env.NODE_ENV || 'production');
+  console.log('  - NODE_ENV:', process.env.NODE_ENV || 'development');
   console.log('  - AUDD_TOKEN:', process.env.AUDD_TOKEN ? '✅ Configurado' : '❌ Não encontrado');
   console.log('  - SUPABASE_URL:', process.env.SUPABASE_URL ? '✅ Configurado' : '❌ Não encontrado');
-  // Ajuste o nome da variável conforme seu .env real
   console.log('  - SUPABASE_SERVICE_KEY:', (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY) ? '✅ Configurado' : '❌ Não encontrado');
 });

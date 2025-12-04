@@ -46,15 +46,11 @@ export async function updateArquivoStatus(
     .eq('id_arquivo', idArquivo);
 
   if (error) {
-    // If the enum value was rejected (invalid input), try common variants (underscores/no-spaces/uppercase)
     const msg = (error && (error.message || '')).toString();
     if (msg.includes('invalid input value for enum') || msg.includes('invalid input value')) {
       const candidates = [
-        // replace spaces with underscore
         (status as string).replace(/\s+/g, '_'),
-        // remove spaces
         (status as string).replace(/\s+/g, ''),
-        // uppercase with underscores
         (status as string).toUpperCase().replace(/\s+/g, '_')
       ];
 
@@ -353,8 +349,12 @@ export async function getRelatorioEDLById(idRelatorio: number) {
     .eq('id_relatorio', idRelatorio)
     .single();
   
-  if (error || !relatorio) {
-    throw new Error('Relatório EDL não encontrado');
+  if (error) {
+    throw new Error(`Erro ao buscar relatório: ${error.message}`);
+  }
+  
+  if (!relatorio) {
+    throw new Error(`Relatório EDL com ID ${idRelatorio} não encontrado`);
   }
   
   return relatorio;
